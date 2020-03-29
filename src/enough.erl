@@ -29,7 +29,7 @@
 
 %% gen_server and proc_lib callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+         terminate/2, format_status/2, code_change/3]).
 
 -define(OPT_KEYS,[sync_mode_qlen,
                   drop_mode_qlen,
@@ -62,7 +62,7 @@
 -callback notify(Note::atom(), State::term()) -> term().
 -callback reset_state(State::term()) -> term().
 
--optional_callbacks([reset_state/1, notify/1]).
+-optional_callbacks([reset_state/1, notify/2]).
 
 %%%-----------------------------------------------------------------
 %%% API
@@ -309,6 +309,16 @@ terminate(Reason, #{id:=Name, module:=Module, cb_state:=CBState}) ->
     _ = try_callback_call(Module,terminate,[Reason,CBState],ok),
     unregister(Name),
     ok.
+
+%% @hidden
+format_status(Opt, [PDict0, #{module := Module,
+                               cb_state := CBState0}=State]) ->
+    Opts = maps:with(?OPT_KEYS, State),
+    PDict = lists:keydelete(?msg(ref), 0, PDict0),
+    CBState = try_callback_call(Module, format_status, [Opt, CBState0], CBState0),
+    [{data, [{"State", CBState},
+             {"PDict", PDict},
+             {"Opts", Opts}]}].
 
 %% @hidden
 code_change(_OldVsn, State, _Extra) ->
