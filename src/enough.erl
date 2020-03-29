@@ -321,8 +321,16 @@ format_status(Opt, [PDict0, #{module := Module,
              {"Opts", Opts}]}].
 
 %% @hidden
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
+code_change(OldVsn, #{cb_state := CBState0, module := Module} = State, Extra) ->
+    case try_callback_call(Module,
+                           code_change,
+                           [OldVsn, CBState0, Extra],
+                           {ok, CBState0}) of
+        {ok, CBState} ->
+            {ok, State#{cb_state := CBState}};
+        Error ->
+            Error
+    end.
 
 %%%-----------------------------------------------------------------
 %%% Internal functions
