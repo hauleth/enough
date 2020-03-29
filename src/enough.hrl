@@ -81,6 +81,8 @@
 
 -define(diff_time(OS_T1, OS_T0), OS_T1-OS_T0).
 
+-define(msg(X), {'$olp', X}).
+
 %%%-----------------------------------------------------------------
 %%% These macros enable statistics counters in the state of the
 %%% process, which is useful for analysing the overload protection

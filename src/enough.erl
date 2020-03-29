@@ -23,9 +23,9 @@
 -include("enough.hrl").
 
 %% API
--export([start_link/4, load/2, info/1, reset/1, stop/1, restart/1,
+-export([start_link/4, load/2, info/1, reset/1, stop/1,
          set_opts/2, get_opts/1, get_default_opts/0, get_pid/1,
-         call/2, cast/2, get_ref/0, get_ref/1]).
+         get_ref/0, get_ref/1]).
 
 %% gen_server and proc_lib callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -46,11 +46,29 @@
 
 -opaque olp_ref() :: {atom(),pid(),ets:tid()}.
 
--type options() :: logger:olp_config().
+-type options() :: #{
+        sync_mode_qlen => non_neg_integer(),
+        drop_mode_qlen => pos_integer(),
+        flush_qlen => pos_integer(),
+        burst_limit_enable => boolean(),
+        burst_limit_max_count => pos_integer(),
+        burst_limit_window_time => pos_integer(),
+        overload_kill_enable => boolean(),
+        overload_kill_qlen => pos_integer(),
+        overload_kill_mem_size => pos_integer(),
+        overload_kill_restart_after => non_neg_integer() | infinity}.
+
+-callback handle_load(Msg::term(), State::term()) -> term().
+-callback notify(Note::atom(), State::term()) -> term().
+-callback reset_state(State::term()) -> term().
+
+-optional_callbacks([reset_state/1, notify/1]).
 
 %%%-----------------------------------------------------------------
 %%% API
 
+%% @doc Start new process with overload protection
+%% @end
 -spec start_link(Name,Module,Args,Options) -> {ok,Pid,Olp} | {error,Reason} when
       Name :: atom(),
       Module :: module(),
@@ -68,6 +86,8 @@ start_link(Name,Module,Args,Options0) when is_map(Options0) ->
             Error
     end.
 
+%% @doc Call action that will be overload safe
+%% @end
 -spec load(Olp, Msg) -> ok when
       Olp :: olp_ref(),
       Msg :: term().
@@ -78,9 +98,9 @@ load({_Name,Pid,ModeRef},Msg) ->
     %% is set and no message is sent.
     case get_mode(ModeRef) of
         async ->
-            gen_server:cast(Pid, {'$olp_load',Msg});
+            gen_server:cast(Pid, ?msg({load,Msg}));
         sync ->
-            case call(Pid, {'$olp_load',Msg}) of
+            case call(Pid, ?msg({load,Msg})) of
                 ok ->
                     ok;
                 _Other ->
@@ -94,31 +114,31 @@ load({_Name,Pid,ModeRef},Msg) ->
 -spec info(Olp) -> map() | {error, busy} when
       Olp :: atom() | pid() | olp_ref().
 info(Olp) ->
-    call(Olp, info).
+    call(Olp, ?msg(info)).
 
 -spec reset(Olp) -> ok | {error, busy} when
       Olp :: atom() | pid() | olp_ref().
 reset(Olp) ->
-    call(Olp, reset).
+    call(Olp, ?msg(reset)).
 
 -spec stop(Olp) -> ok when
       Olp :: atom() | pid() | olp_ref().
 stop({_Name,Pid,_ModRef}) ->
     stop(Pid);
 stop(Pid) ->
-    _ = gen_server:call(Pid, stop),
+    _ = gen_server:call(Pid, ?msg(stop)),
     ok.
 
 -spec set_opts(Olp, Opts) -> ok | {error,term()} | {error, busy} when
       Olp :: atom() | pid() | olp_ref(),
       Opts :: options().
 set_opts(Olp, Opts) ->
-    call(Olp, {set_opts,Opts}).
+    call(Olp, ?msg({set_opts,Opts})).
 
 -spec get_opts(Olp) -> options() | {error, busy} when
       Olp :: atom() | pid() | olp_ref().
 get_opts(Olp) ->
-    call(Olp, get_opts).
+    call(Olp, ?msg(get_opts)).
 
 -spec get_default_opts() -> options().
 get_default_opts() ->
@@ -133,25 +153,14 @@ get_default_opts() ->
       overload_kill_mem_size      => ?OVERLOAD_KILL_MEM_SIZE,
       overload_kill_restart_after => ?OVERLOAD_KILL_RESTART_AFTER}.
 
--spec restart(fun(() -> any())) -> ok.
-restart(Fun) ->
-    % Result =
-        try Fun()
-        catch C:R:S ->
-                {error,{restart_failed,Fun,C,R,S}}
-        end,
-    % ?LOG_INTERNAL(debug,#{},[{enough,restart},
-    %                          {result,Result}]),
-    ok.
-
 -spec get_ref() -> olp_ref().
 get_ref() ->
-    get(olp_ref).
+    get(?msg(ref)).
 
--spec get_ref(PidOrName) -> olp_ref() | {error, busy} when
+-spec get_ref(PidOrName) -> {ok, olp_ref()} | {error, busy} when
       PidOrName :: pid() | atom().
 get_ref(PidOrName) ->
-    call(PidOrName,get_ref).
+    call(PidOrName,?msg(get_ref)).
 
 -spec get_pid(olp_ref()) -> pid().
 get_pid({_Name,Pid,_ModeRef}) ->
@@ -161,6 +170,7 @@ get_pid({_Name,Pid,_ModeRef}) ->
 %%% gen_server callbacks
 %%%===================================================================
 
+%% @hidden
 init([Name,Module,Args,Options]) ->
     register(Name, self()),
     process_flag(message_queue_data, off_heap),
@@ -169,7 +179,7 @@ init([Name,Module,Args,Options]) ->
 
     ModeRef = {?MODULE, Name},
     OlpRef = {Name,self(),ModeRef},
-    put(olp_ref,OlpRef),
+    put(?msg(ref),OlpRef),
     try Module:init(Args) of
         {ok,CBState} ->
             set_mode(ModeRef, async),
@@ -199,16 +209,17 @@ init([Name,Module,Args,Options]) ->
             proc_lib:init_ack(Error)
     end.
 
+%% @hidden
 %% This is the synchronous load event.
-handle_call({'$olp_load', Msg}, _From, State) ->
+handle_call(?msg({load, Msg}), _From, State) ->
     {Result,State1} = do_load(Msg, call, State#{idle=>false}),
     %% Result == ok | dropped
     reply_return(Result,State1);
 
-handle_call(get_ref,_From,#{id:=Name,mode_ref:=ModeRef}=State) ->
-    reply_return({Name,self(),ModeRef},State);
+handle_call(?msg(get_ref),_From,#{id:=Name,mode_ref:=ModeRef}=State) ->
+    reply_return({ok, {Name,self(),ModeRef}},State);
 
-handle_call({set_opts,Opts0},_From,State) ->
+handle_call(?msg({set_opts,Opts0}),_From,State) ->
     Opts = maps:merge(maps:with(?OPT_KEYS,State),Opts0),
     case check_opts(Opts) of
         ok ->
@@ -217,13 +228,13 @@ handle_call({set_opts,Opts0},_From,State) ->
             reply_return(Error, State)
     end;
 
-handle_call(get_opts,_From,State) ->
+handle_call(?msg(get_opts),_From,State) ->
     reply_return(maps:with(?OPT_KEYS,State), State);
 
-handle_call(info, _From, State) ->
+handle_call(?msg(info), _From, State) ->
     reply_return(State, State);
 
-handle_call(reset, _From, #{module:=Module,cb_state:=CBState}=State) ->
+handle_call(?msg(reset), _From, #{module:=Module,cb_state:=CBState}=State) ->
     State1 = ?merge_with_stats(State),
     CBState1 = try_callback_call(Module,reset_state,[CBState],CBState),
     reply_return(ok, State1#{idle => true,
@@ -231,7 +242,7 @@ handle_call(reset, _From, #{module:=Module,cb_state:=CBState}=State) ->
                              last_load_ts => ?timestamp(),
                              cb_state => CBState1});
 
-handle_call(stop, _From, State) ->
+handle_call(?msg(stop), _From, State) ->
     {stop, {shutdown,stopped}, ok, State};
 
 handle_call(Msg, From, #{module:=Module,cb_state:=CBState}=State) ->
@@ -246,8 +257,9 @@ handle_call(Msg, From, #{module:=Module,cb_state:=CBState}=State) ->
             {stop, Reason, State#{cb_state=>CBState1}}
     end.
 
+%% @hidden
 %% This is the asynchronous load event.
-handle_cast({'$olp_load', Msg}, State) ->
+handle_cast(?msg({load, Msg}), State) ->
     {_Result,State1} = do_load(Msg, cast, State#{idle=>false}),
     noreply_return(State1);
 
@@ -259,6 +271,7 @@ handle_cast(Msg, #{module:=Module, cb_state:=CBState} = State) ->
             {stop, Reason, State#{cb_state=>CBState1}}
     end.
 
+%% @hidden
 handle_info(timeout, #{mode_ref:=ModeRef} = State) ->
     State1 = notify(idle,State),
     State2 = maybe_notify_mode_change(async,State1),
@@ -277,6 +290,7 @@ handle_info(Msg, #{module := Module, cb_state := CBState} = State) ->
             noreply_return(State1)
     end.
 
+%% @hidden
 terminate({shutdown,{overloaded,_QLen,_Mem}},
           #{id:=Name, module := Module, cb_state := CBState,
             overload_kill_restart_after := RestartAfter} = State) ->
@@ -296,9 +310,9 @@ terminate(Reason, #{id:=Name, module:=Module, cb_state:=CBState}) ->
     unregister(Name),
     ok.
 
+%% @hidden
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
-
 
 %%%-----------------------------------------------------------------
 %%% Internal functions
@@ -312,10 +326,6 @@ call(Server, Msg) ->
     catch
         _:{timeout,_} -> {error,busy}
     end.
-
--spec cast(olp_ref(),term()) -> ok.
-cast({_Name, Pid, _ModeRef},Msg) ->
-    gen_server:cast(Pid, Msg).
 
 %% check for overload between every event (and set Mode to async,
 %% sync or drop accordingly), but never flush the whole mailbox
@@ -512,7 +522,7 @@ limit_burst(#{burst_win_ts := BurstWinT0,
               burst_msg_count := BurstMsgCount,
               burst_limit_window_time := BurstLimitWinTime,
               burst_limit_max_count := BurstLimitMaxCnt} = State) ->
-    if (BurstMsgCount >= BurstLimitMaxCnt) -> 
+    if (BurstMsgCount >= BurstLimitMaxCnt) ->
             %% the limit for allowed messages has been reached
             BurstWinT1 = ?timestamp(),
             case ?diff_time(BurstWinT1,BurstWinT0) of
@@ -553,9 +563,9 @@ flush_load(N, Limit) ->
     %% and stop, so that these have a chance to be processed even
     %% under heavy load
     receive
-        {'$gen_cast',{'$olp_load',_}} ->
+        {'$gen_cast',?msg({load,_})} ->
             flush_load(N+1, Limit);
-        {'$gen_call',{Pid,MRef},{'$olp_load',_}} ->
+        {'$gen_call',{Pid,MRef},?msg({load,_})} ->
             Pid ! {MRef, dropped},
             flush_load(N+1, Limit);
         {log,_,_,_,_} ->
@@ -591,13 +601,12 @@ notify(Note,#{module:=Module,cb_state:=CBState}=State) ->
     State#{cb_state=>CBState1}.
 
 try_callback_call(Module, Function, Args) ->
-    try_callback_call(Module, Function, Args, '$no_default_return').
+    apply(Module, Function, Args).
 
 try_callback_call(Module, Function, Args, DefRet) ->
     try apply(Module, Function, Args)
     catch
-        throw:R -> R;
-        error:undef:S when DefRet=/='$no_default_return' ->
+        error:undef:S ->
             case S of
                 [{Module,Function,Args,_}|_] ->
                     DefRet;
