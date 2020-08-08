@@ -124,8 +124,7 @@
                 STATE#{max_time => ?max(TIME0,TIME)} end).
 
   -define(update_other(OTHER, VAR, INCVAL, STATE),
-          begin #{OTHER := VAR} = STATE,
-                STATE#{OTHER => VAR+INCVAL} end).
+          maps:update_with(OTHER, fun(A) -> A + INCVAL end, STATE)).
 
   -define(update_freq(TIME,STATE),
           begin
@@ -160,10 +159,9 @@
 %%% included in code to be officially released.
 
 %%-define(OBSERVER_MOD, logger_test).
--ifdef(OBSERVER_MOD).
+-ifdef(OBSERVER).
   -define(start_observation(NAME), ?OBSERVER:start_observation(NAME)).
   -define(observe(NAME,EVENT), ?OBSERVER:observe(NAME,EVENT)).
-
 -else.                                          % DEFAULT!
   -define(start_observation(_NAME), ok).
   -define(observe(_NAME,_EVENT), ok).

@@ -23,8 +23,10 @@
 -include("enough.hrl").
 
 %% API
--export([start_link/4, load/2, info/1, reset/1, stop/1,
-         set_opts/2, get_opts/1, get_default_opts/0, get_pid/1,
+-export([start/3, start/4,
+         start_link/3, start_link/4,
+         load/2, info/1, reset/1, stop/1,
+         set_opts/2, get_opts/1, get_pid/1,
          get_ref/0, get_ref/1]).
 
 %% gen_server and proc_lib callbacks
@@ -42,9 +44,21 @@
                   overload_kill_mem_size,
                   overload_kill_restart_after]).
 
+-define(DEFAULT_OPTS,
+        #{sync_mode_qlen              => ?SYNC_MODE_QLEN,
+          drop_mode_qlen              => ?DROP_MODE_QLEN,
+          flush_qlen                  => ?FLUSH_QLEN,
+          burst_limit_enable          => ?BURST_LIMIT_ENABLE,
+          burst_limit_max_count       => ?BURST_LIMIT_MAX_COUNT,
+          burst_limit_window_time     => ?BURST_LIMIT_WINDOW_TIME,
+          overload_kill_enable        => ?OVERLOAD_KILL_ENABLE,
+          overload_kill_qlen          => ?OVERLOAD_KILL_QLEN,
+          overload_kill_mem_size      => ?OVERLOAD_KILL_MEM_SIZE,
+          overload_kill_restart_after => ?OVERLOAD_KILL_RESTART_AFTER}).
+
 -export_type([olp_ref/0, options/0]).
 
--opaque olp_ref() :: {atom(),pid(),ets:tid()}.
+-opaque olp_ref() :: {atom(),pid(),term()}.
 
 -type options() :: #{
         sync_mode_qlen => non_neg_integer(),
@@ -58,16 +72,53 @@
         overload_kill_mem_size => pos_integer(),
         overload_kill_restart_after => non_neg_integer() | infinity}.
 
+-callback init(Arg::term()) ->
+    {ok, State::term()} | ignore | {stop, Reason::term()}.
 -callback handle_load(Msg::term(), State::term()) -> term().
+-callback handle_info(Msg::term(), State::term()) ->
+    {noreply, NewState::term()}
+    | {stop, Reason::term(), NewState::term()}.
+-callback handle_call(Msg::term(), From::{pid(), term()}, State::term()) ->
+    {noreply, NewState::term()}
+    | {reply, Reply::term(), NewState::term()}
+    | {stop, Reason::term(), NewState::term()}.
+-callback handle_cast(Msg::term(), State::term()) ->
+    {noreply, NewState::term()}
+    | {stop, Reason::term(), NewState::term()}.
 -callback notify(Note::atom(), State::term()) -> term().
 -callback reset_state(State::term()) -> term().
 
--optional_callbacks([reset_state/1, notify/2]).
+-optional_callbacks([handle_call/3,
+                     handle_cast/2,
+                     handle_info/2,
+                     reset_state/1,
+                     notify/2]).
 
 %%%-----------------------------------------------------------------
 %%% API
 
 %% @doc Start new process with overload protection
+%%
+%% == Options ==
+%%
+%% <ul>
+%%      <li>`sync_mode_qlen' - This specifies the `message_queue_len' value
+%%      where the `enough:load/2' requests switch from asynchronous to
+%%      synchronous calls. Defaults to `10'.</li>
+%%      <li>`drop_mode_qlen' - Above this `message_queue_len', the
+%%      `enough:load/2' requests will be droppes, i.e. no messages will be
+%%      delivered to the process. Defaults to `200'.</li>
+%%      <li>`flush_qlen' - above this `message_queue_len', the process will
+%%      flush its mailbox and only leave this number of messages in it. Defaults
+%%      to `1000'.</li>
+%%      <li>`burst_limit_enable'</li>
+%%      <li>`burst_limit_max_count'</li>
+%%      <li>`burst_limit_window_time'</li>
+%%      <li>`overload_kill_enable'</li>
+%%      <li>`overload_kill_qlen'</li>
+%%      <li>`overload_kill_mem_size'</li>
+%%      <li>`overload_kill_restart_after'</li>
+%% </ul>
 %% @end
 -spec start_link(Name,Module,Args,Options) -> {ok,Pid,Olp} | {error,Reason} when
       Name :: atom(),
@@ -78,13 +129,34 @@
       Olp :: olp_ref(),
       Reason :: term().
 start_link(Name,Module,Args,Options0) when is_map(Options0) ->
-    Options = maps:merge(get_default_opts(),Options0),
+    Options = maps:merge(?DEFAULT_OPTS, Options0),
     case check_opts(Options) of
         ok ->
             proc_lib:start_link(?MODULE,init,[[Name,Module,Args,Options]]);
         Error ->
             Error
     end.
+
+start_link(Name,Module,Args) -> start_link(Name,Module,Args,#{}).
+
+-spec start(Name,Module,Args,Options) -> {ok,Pid,Olp} | {error,Reason} when
+      Name :: atom(),
+      Module :: module(),
+      Args :: term(),
+      Options :: options(),
+      Pid :: pid(),
+      Olp :: olp_ref(),
+      Reason :: term().
+start(Name,Module,Args,Options0) when is_map(Options0) ->
+    Options = maps:merge(?DEFAULT_OPTS, Options0),
+    case check_opts(Options) of
+        ok ->
+            proc_lib:start(?MODULE,init,[[Name,Module,Args,Options]]);
+        Error ->
+            Error
+    end.
+
+start(Name,Module,Args) -> start(Name,Module,Args,#{}).
 
 %% @doc Call action that will be overload safe
 %% @end
@@ -123,7 +195,7 @@ reset(Olp) ->
 
 -spec stop(Olp) -> ok when
       Olp :: atom() | pid() | olp_ref().
-stop({_Name,Pid,_ModRef}) ->
+stop({_Name,Pid,_ModeRef}) ->
     stop(Pid);
 stop(Pid) ->
     _ = gen_server:call(Pid, ?msg(stop)),
@@ -139,19 +211,6 @@ set_opts(Olp, Opts) ->
       Olp :: atom() | pid() | olp_ref().
 get_opts(Olp) ->
     call(Olp, ?msg(get_opts)).
-
--spec get_default_opts() -> options().
-get_default_opts() ->
-    #{sync_mode_qlen              => ?SYNC_MODE_QLEN,
-      drop_mode_qlen              => ?DROP_MODE_QLEN,
-      flush_qlen                  => ?FLUSH_QLEN,
-      burst_limit_enable          => ?BURST_LIMIT_ENABLE,
-      burst_limit_max_count       => ?BURST_LIMIT_MAX_COUNT,
-      burst_limit_window_time     => ?BURST_LIMIT_WINDOW_TIME,
-      overload_kill_enable        => ?OVERLOAD_KILL_ENABLE,
-      overload_kill_qlen          => ?OVERLOAD_KILL_QLEN,
-      overload_kill_mem_size      => ?OVERLOAD_KILL_MEM_SIZE,
-      overload_kill_restart_after => ?OVERLOAD_KILL_RESTART_AFTER}.
 
 -spec get_ref() -> olp_ref().
 get_ref() ->
@@ -182,7 +241,10 @@ init([Name,Module,Args,Options]) ->
     put(?msg(ref),OlpRef),
     try Module:init(Args) of
         {ok,CBState} ->
-            set_mode(ModeRef, async),
+            case Options of
+                #{sync_mode_qlen := 0} -> set_mode(ModeRef, sync);
+                _ -> set_mode(ModeRef, async)
+            end,
             T0 = ?timestamp(),
             proc_lib:init_ack({ok,self(),OlpRef}),
             %% Storing options in state to avoid copying
@@ -585,10 +647,6 @@ flush_load(N, Limit) ->
             flush_load(N+1, Limit);
         {'$gen_call',{Pid,MRef},?msg({load,_})} ->
             Pid ! {MRef, dropped},
-            flush_load(N+1, Limit);
-        {log,_,_,_,_} ->
-            flush_load(N+1, Limit);
-        {log,_,_,_} ->
             flush_load(N+1, Limit)
     after
         0 -> N
@@ -603,7 +661,7 @@ overload_levels_ok(Options) ->
 get_mode(Ref) -> persistent_term:get(Ref, async).
 
 set_mode(Ref, M) ->
-    true = is_atom(M), persistent_term:put(Ref, M), M.
+    true = is_atom(M), ok = persistent_term:put(Ref, M), M.
 
 maybe_notify_mode_change(drop,#{mode:=Mode0}=State)
   when Mode0=/=drop ->
