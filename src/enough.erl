@@ -376,7 +376,7 @@ terminate(Reason, #{id:=Name, module:=Module, cb_state:=CBState}) ->
 format_status(Opt, [PDict0, #{module := Module,
                                cb_state := CBState0}=State]) ->
     Opts = maps:with(?OPT_KEYS, State),
-    PDict = lists:keydelete(?msg(ref), 0, PDict0),
+    PDict = lists:keydelete(?msg(ref), 1, PDict0),
     CBState = try_callback_call(Module, format_status, [Opt, CBState0], CBState0),
     [{data, [{"State", CBState},
              {"PDict", PDict},
