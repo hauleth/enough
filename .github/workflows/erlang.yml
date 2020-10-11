@@ -39,6 +39,8 @@ jobs:
       run: rebar3 ct --cover
     - name: XRef
       run: rebar3 xref
+    - name: Check formatting
+      run: rebar3 fmt --check
     - name: Covertool
       if: ${{ always() }}
       run: rebar3 covertool generate

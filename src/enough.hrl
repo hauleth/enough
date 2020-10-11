@@ -21,7 +21,7 @@
 %%%-----------------------------------------------------------------
 %%% Overload protection configuration
 
-%%! *** NOTE *** 
+%%! *** NOTE ***
 %%! It's important that:
 %%! SYNC_MODE_QLEN =< DROP_MODE_QLEN =< FLUSH_QLEN
 %%! and that DROP_MODE_QLEN >= 2.
@@ -73,13 +73,14 @@
 -define(timestamp(), erlang:monotonic_time(microsecond)).
 
 -define(max(X1, X2),
-        if
-            X2 == undefined -> X1;
-            X2 > X1 -> X2;
-            true -> X1
-        end).
+    if
+        X2 == undefined -> X1;
+        X2 > X1 -> X2;
+        true -> X1
+    end
+).
 
--define(diff_time(OS_T1, OS_T0), OS_T1-OS_T0).
+-define(diff_time(OS_T1, OS_T0), OS_T1 - OS_T0).
 
 -define(msg(X), {'$olp', X}).
 
@@ -92,62 +93,79 @@
 
 %% -define(SAVE_STATS, true).
 -ifdef(SAVE_STATS).
-  -define(merge_with_stats(STATE),
-          begin
-              TIME = ?timestamp(),
-              STATE#{start => TIME, time => {TIME,0},
-                     flushes => 0, flushed => 0, drops => 0,
-                     burst_drops => 0, casts => 0, calls => 0,
-                     writes => 0, max_qlen => 0, max_time => 0,
-                     max_mem => 0, freq => {TIME,0,0}} end).
+-define(merge_with_stats(STATE), begin
+    TIME = ?timestamp(),
+    STATE#{
+        start => TIME,
+        time => {TIME, 0},
+        flushes => 0,
+        flushed => 0,
+        drops => 0,
+        burst_drops => 0,
+        casts => 0,
+        calls => 0,
+        writes => 0,
+        max_qlen => 0,
+        max_time => 0,
+        max_mem => 0,
+        freq => {TIME, 0, 0}
+    }
+end).
 
-  -define(update_max_qlen(QLEN, STATE),
-          begin #{max_qlen := QLEN0} = STATE,
-                STATE#{max_qlen => ?max(QLEN0,QLEN)} end).
+-define(update_max_qlen(QLEN, STATE), begin
+    #{max_qlen := QLEN0} = STATE,
+    STATE#{max_qlen => ?max(QLEN0, QLEN)}
+end).
 
-  -define(update_max_mem(MEM, STATE),
-          begin #{max_mem := MEM0} = STATE,
-                STATE#{max_mem => ?max(MEM0,MEM)} end).
+-define(update_max_mem(MEM, STATE), begin
+    #{max_mem := MEM0} = STATE,
+    STATE#{max_mem => ?max(MEM0, MEM)}
+end).
 
-  -define(update_calls_or_casts(CALL_OR_CAST, INC, STATE),
-          case CALL_OR_CAST of
-              cast ->
-                  #{casts := CASTS0} = STATE,
-                  STATE#{casts => CASTS0+INC};
-              call ->
-                  #{calls := CALLS0} = STATE,
-                  STATE#{calls => CALLS0+INC}
-          end).
+-define(update_calls_or_casts(CALL_OR_CAST, INC, STATE),
+    case CALL_OR_CAST of
+        cast ->
+            #{casts := CASTS0} = STATE,
+            STATE#{casts => CASTS0 + INC};
+        call ->
+            #{calls := CALLS0} = STATE,
+            STATE#{calls => CALLS0 + INC}
+    end
+).
 
-  -define(update_max_time(TIME, STATE),
-          begin #{max_time := TIME0} = STATE,
-                STATE#{max_time => ?max(TIME0,TIME)} end).
+-define(update_max_time(TIME, STATE), begin
+    #{max_time := TIME0} = STATE,
+    STATE#{max_time => ?max(TIME0, TIME)}
+end).
 
-  -define(update_other(OTHER, VAR, INCVAL, STATE),
-          maps:update_with(OTHER, fun(A) -> A + INCVAL end, STATE)).
+-define(update_other(OTHER, VAR, INCVAL, STATE),
+    maps:update_with(OTHER, fun(A) -> A + INCVAL end, STATE)
+).
 
-  -define(update_freq(TIME,STATE),
-          begin
-              case STATE of
-                  #{freq := {START, 49, _}} ->
-                      STATE#{freq => {TIME, 0, trunc(1000000*50/(?diff_time(TIME,START)))}};
-                  #{freq := {START, N, FREQ}} ->
-                      STATE#{freq => {START, N+1, FREQ}}
-              end end).
+-define(update_freq(TIME, STATE), begin
+    case STATE of
+        #{freq := {START, 49, _}} ->
+            STATE#{freq => {TIME, 0, trunc(1000000 * 50 / (?diff_time(TIME, START)))}};
+        #{freq := {START, N, FREQ}} ->
+            STATE#{freq => {START, N + 1, FREQ}}
+    end
+end).
 
-  -define(update_time(TIME,STATE),
-          begin #{start := START} = STATE,
-                STATE#{time => {TIME,trunc((?diff_time(TIME,START))/1000000)}} end).
+-define(update_time(TIME, STATE), begin
+    #{start := START} = STATE,
+    STATE#{time => {TIME, trunc((?diff_time(TIME, START)) / 1000000)}}
+end).
 
--else.                                          % DEFAULT!
-  -define(merge_with_stats(STATE), STATE).
-  -define(update_max_qlen(_QLEN, STATE), STATE).
-  -define(update_max_mem(_MEM, STATE), STATE).
-  -define(update_calls_or_casts(_CALL_OR_CAST, _INC, STATE), STATE).
-  -define(update_max_time(_TIME, STATE), STATE).
-  -define(update_other(_OTHER, _VAR, _INCVAL, STATE), STATE).
-  -define(update_freq(_TIME, STATE), STATE).
-  -define(update_time(_TIME, STATE), STATE).
+% DEFAULT!
+-else.
+-define(merge_with_stats(STATE), STATE).
+-define(update_max_qlen(_QLEN, STATE), STATE).
+-define(update_max_mem(_MEM, STATE), STATE).
+-define(update_calls_or_casts(_CALL_OR_CAST, _INC, STATE), STATE).
+-define(update_max_time(_TIME, STATE), STATE).
+-define(update_other(_OTHER, _VAR, _INCVAL, STATE), STATE).
+-define(update_freq(_TIME, STATE), STATE).
+-define(update_time(_TIME, STATE), STATE).
 -endif.
 
 %%%-----------------------------------------------------------------
@@ -160,9 +178,10 @@
 
 %%-define(OBSERVER_MOD, logger_test).
 -ifdef(OBSERVER).
-  -define(start_observation(NAME), ?OBSERVER:start_observation(NAME)).
-  -define(observe(NAME,EVENT), ?OBSERVER:observe(NAME,EVENT)).
--else.                                          % DEFAULT!
-  -define(start_observation(_NAME), ok).
-  -define(observe(_NAME,_EVENT), ok).
+-define(start_observation(NAME), ?OBSERVER:start_observation(NAME)).
+-define(observe(NAME, EVENT), ?OBSERVER:observe(NAME, EVENT)).
+% DEFAULT!
+-else.
+-define(start_observation(_NAME), ok).
+-define(observe(_NAME, _EVENT), ok).
 -endif.
