@@ -8,7 +8,7 @@
     get_ref/1,
     overload/1,
     stopping/1,
-    kill_on_chocked/1
+    kill_on_choked/1
 ]).
 
 -include_lib("stdlib/include/assert.hrl").
@@ -22,7 +22,7 @@ all() ->
         get_ref,
         overload,
         stopping,
-        kill_on_chocked
+        kill_on_choked
     ].
 
 pings_back(_Config) ->
@@ -108,7 +108,7 @@ stopping(_Config) ->
     ok = enough:stop(OlpRef2),
     ?assertNot(erlang:is_process_alive(Pid2)).
 
-kill_on_chocked(_Config) ->
+kill_on_choked(_Config) ->
     Quoted = ?Q([
         "-export([init/1,handle_load/2]).",
         "init(Arg) -> {ok,Arg}.",
