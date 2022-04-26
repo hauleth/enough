@@ -14,7 +14,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        otp_version: ['24', '23', '22', '21']
+        otp_version: ['24', '23', '22']
         os: [ubuntu-latest]
     env:
       OTP_VERSION: ${{ matrix.otp_version }}
@@ -55,7 +55,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        otp_version: ['24', '23', '22', '21']
+        otp_version: ['24', '23', '22']
         os: [ubuntu-latest]
     steps:
     - uses: actions/checkout@v2

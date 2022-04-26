@@ -151,7 +151,16 @@
     Pid :: pid(),
     Olp :: olp_ref(),
     Reason :: term().
-start_link(Name, Module, Args, Options0) when is_map(Options0) ->
+start_link(Name, Module, Args, Options) ->
+    do_start_link(Name, Module, Args, Options).
+
+start_link(Name, Module, Args) ->
+    do_start_link(Name, Module, Args, #{}).
+
+start_link(Module, Args) ->
+    do_start_link([], Module, Args, #{}).
+
+do_start_link(Name, Module, Args, Options0) when is_map(Options0) ->
     Options = maps:merge(?DEFAULT_OPTS, Options0),
     case check_opts(Options) of
         ok ->
@@ -159,10 +168,6 @@ start_link(Name, Module, Args, Options0) when is_map(Options0) ->
         Error ->
             Error
     end.
-
-start_link(Name, Module, Args) -> start_link(Name, Module, Args, #{}).
-
-start_link(Module, Args) -> start_link([], Module, Args, #{}).
 
 -spec start(Name, Module, Args, Options) -> {ok, Pid, Olp} | {error, Reason} when
     Name :: atom(),
@@ -172,7 +177,16 @@ start_link(Module, Args) -> start_link([], Module, Args, #{}).
     Pid :: pid(),
     Olp :: olp_ref(),
     Reason :: term().
-start(Name, Module, Args, Options0) when is_map(Options0) ->
+start(Name, Module, Args, Options) ->
+    do_start(Name, Module, Args, Options).
+
+start(Name, Module, Args) ->
+    do_start(Name, Module, Args, #{}).
+
+start(Module, Args) ->
+    do_start([], Module, Args, #{}).
+
+do_start(Name, Module, Args, Options0) ->
     Options = maps:merge(?DEFAULT_OPTS, Options0),
     case check_opts(Options) of
         ok ->
@@ -180,10 +194,6 @@ start(Name, Module, Args, Options0) when is_map(Options0) ->
         Error ->
             Error
     end.
-
-start(Name, Module, Args) -> start(Name, Module, Args, #{}).
-
-start(Module, Args) -> start([], Module, Args, #{}).
 
 %% @doc Call action that will be overload safe
 %% @end
@@ -253,8 +263,9 @@ get_pid({Pid, _ModeRef}) ->
 
 %% @hidden
 init([Name, Module, Args, Options]) ->
-    if is_atom(Name) -> register(Name, self());
-       true -> ok
+    if
+        is_atom(Name) -> register(Name, self());
+        true -> ok
     end,
     process_flag(message_queue_data, off_heap),
 
@@ -415,8 +426,9 @@ terminate(
     %% kill_if_choked/3).
 
     %%!!!! to avoid error printout of callback crashed on stop
-    if is_atom(Name) -> unregister(Name);
-       true -> ok
+    if
+        is_atom(Name) -> unregister(Name);
+        true -> ok
     end,
     case try_callback_call(Module, terminate, [overloaded, CBState], ok) of
         {ok, Fun} when is_function(Fun, 0), is_integer(RestartAfter) ->
@@ -428,7 +440,8 @@ terminate(
     end;
 terminate(Reason, #{id := Name, module := Module, cb_state := CBState}) ->
     _ = try_callback_call(Module, terminate, [Reason, CBState], ok),
-    if is_atom(Name) -> unregister(Name);
+    if
+        is_atom(Name) -> unregister(Name);
         true -> ok
     end,
     ok.
