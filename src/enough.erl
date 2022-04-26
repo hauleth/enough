@@ -253,8 +253,9 @@ get_pid({Pid, _ModeRef}) ->
 
 %% @hidden
 init([Name, Module, Args, Options]) ->
-    if is_atom(Name) -> register(Name, self());
-       true -> ok
+    if
+        is_atom(Name) -> register(Name, self());
+        true -> ok
     end,
     process_flag(message_queue_data, off_heap),
 
@@ -415,8 +416,9 @@ terminate(
     %% kill_if_choked/3).
 
     %%!!!! to avoid error printout of callback crashed on stop
-    if is_atom(Name) -> unregister(Name);
-       true -> ok
+    if
+        is_atom(Name) -> unregister(Name);
+        true -> ok
     end,
     case try_callback_call(Module, terminate, [overloaded, CBState], ok) of
         {ok, Fun} when is_function(Fun, 0), is_integer(RestartAfter) ->
@@ -428,7 +430,8 @@ terminate(
     end;
 terminate(Reason, #{id := Name, module := Module, cb_state := CBState}) ->
     _ = try_callback_call(Module, terminate, [Reason, CBState], ok),
-    if is_atom(Name) -> unregister(Name);
+    if
+        is_atom(Name) -> unregister(Name);
         true -> ok
     end,
     ok.
