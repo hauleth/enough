@@ -151,7 +151,16 @@
     Pid :: pid(),
     Olp :: olp_ref(),
     Reason :: term().
-start_link(Name, Module, Args, Options0) when is_map(Options0) ->
+start_link(Name, Module, Args, Options) ->
+    do_start_link(Name, Module, Args, Options).
+
+start_link(Name, Module, Args) ->
+    do_start_link(Name, Module, Args, #{}).
+
+start_link(Module, Args) ->
+    do_start_link([], Module, Args, #{}).
+
+do_start_link(Name, Module, Args, Options0) when is_map(Options0) ->
     Options = maps:merge(?DEFAULT_OPTS, Options0),
     case check_opts(Options) of
         ok ->
@@ -159,10 +168,6 @@ start_link(Name, Module, Args, Options0) when is_map(Options0) ->
         Error ->
             Error
     end.
-
-start_link(Name, Module, Args) -> start_link(Name, Module, Args, #{}).
-
-start_link(Module, Args) -> start_link([], Module, Args, #{}).
 
 -spec start(Name, Module, Args, Options) -> {ok, Pid, Olp} | {error, Reason} when
     Name :: atom(),
@@ -172,7 +177,16 @@ start_link(Module, Args) -> start_link([], Module, Args, #{}).
     Pid :: pid(),
     Olp :: olp_ref(),
     Reason :: term().
-start(Name, Module, Args, Options0) when is_map(Options0) ->
+start(Name, Module, Args, Options) ->
+    do_start(Name, Module, Args, Options).
+
+start(Name, Module, Args) ->
+    do_start(Name, Module, Args, #{}).
+
+start(Module, Args) ->
+    do_start([], Module, Args, #{}).
+
+do_start(Name, Module, Args, Options0) ->
     Options = maps:merge(?DEFAULT_OPTS, Options0),
     case check_opts(Options) of
         ok ->
@@ -180,10 +194,6 @@ start(Name, Module, Args, Options0) when is_map(Options0) ->
         Error ->
             Error
     end.
-
-start(Name, Module, Args) -> start(Name, Module, Args, #{}).
-
-start(Module, Args) -> start([], Module, Args, #{}).
 
 %% @doc Call action that will be overload safe
 %% @end
