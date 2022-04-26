@@ -1,10 +1,10 @@
 -module(observer).
 
 -export([
-    start_observation/1,
-    observe/2
+    start_observation/0,
+    observe/1
 ]).
 
-start_observation(_Name) -> ok.
+start_observation() -> ok.
 
-observe(_Name, _Event) -> ok.
+observe(_Event) -> ok.

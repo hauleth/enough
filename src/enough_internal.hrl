@@ -178,8 +178,8 @@ end).
 
 %%-define(OBSERVER_MOD, logger_test).
 -ifdef(OBSERVER).
--define(start_observation(NAME), ?OBSERVER:start_observation(NAME)).
--define(observe(NAME, EVENT), ?OBSERVER:observe(NAME, EVENT)).
+-define(start_observation(NAME), ?OBSERVER:start_observation()).
+-define(observe(NAME, EVENT), ?OBSERVER:observe(EVENT)).
 % DEFAULT!
 -else.
 -define(start_observation(_NAME), ok).

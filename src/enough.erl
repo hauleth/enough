@@ -22,11 +22,12 @@
 -behaviour(gen_server).
 
 -include("enough.hrl").
+-include("enough_internal.hrl").
 
 %% API
 -export([
-    start/3, start/4,
-    start_link/3, start_link/4,
+    start/2, start/3, start/4,
+    start_link/2, start_link/3, start_link/4,
     load/2,
     info/1,
     reset/1,
@@ -42,23 +43,11 @@
     init/1,
     handle_call/3,
     handle_cast/2,
+    handle_continue/2,
     handle_info/2,
     terminate/2,
     format_status/2,
     code_change/3
-]).
-
--define(OPT_KEYS, [
-    sync_mode_qlen,
-    drop_mode_qlen,
-    flush_qlen,
-    burst_limit_enable,
-    burst_limit_max_count,
-    burst_limit_window_time,
-    overload_kill_enable,
-    overload_kill_qlen,
-    overload_kill_mem_size,
-    overload_kill_restart_after
 ]).
 
 -define(DEFAULT_OPTS, #{
@@ -76,7 +65,7 @@
 
 -export_type([olp_ref/0, options/0]).
 
--opaque olp_ref() :: {atom(), pid(), term()}.
+-opaque olp_ref() :: {pid(), term()}.
 
 -type options() :: #{
     sync_mode_qlen => non_neg_integer(),
@@ -95,15 +84,25 @@
 -callback handle_load(Msg :: term(), State :: term()) -> term().
 -callback handle_info(Msg :: term(), State :: term()) ->
     {noreply, NewState :: term()}
+    | {noreply, NewState :: term(), {continue, term()}}
+    | {stop, Reason :: term(), NewState :: term()}.
+
+-callback handle_continue(Msg :: term(), State :: term()) ->
+    {noreply, NewState :: term()}
+    | {noreply, NewState :: term(), {continue, term()}}
     | {stop, Reason :: term(), NewState :: term()}.
 
 -callback handle_call(Msg :: term(), From :: {pid(), term()}, State :: term()) ->
     {noreply, NewState :: term()}
+    | {noreply, NewState :: term(), {continue, term()}}
     | {reply, Reply :: term(), NewState :: term()}
+    | {reply, Reply :: term(), NewState :: term(), {continue, term()}}
+    | {stop, Reason :: term(), Reply :: term(), NewState :: term()}
     | {stop, Reason :: term(), NewState :: term()}.
 
 -callback handle_cast(Msg :: term(), State :: term()) ->
     {noreply, NewState :: term()}
+    | {noreply, NewState :: term(), {continue, term()}}
     | {stop, Reason :: term(), NewState :: term()}.
 
 -callback notify(Note :: atom(), State :: term()) -> term().
@@ -112,6 +111,7 @@
 -optional_callbacks([
     handle_call/3,
     handle_cast/2,
+    handle_continue/2,
     handle_info/2,
     reset_state/1,
     notify/2
@@ -162,6 +162,8 @@ start_link(Name, Module, Args, Options0) when is_map(Options0) ->
 
 start_link(Name, Module, Args) -> start_link(Name, Module, Args, #{}).
 
+start_link(Module, Args) -> start_link([], Module, Args, #{}).
+
 -spec start(Name, Module, Args, Options) -> {ok, Pid, Olp} | {error, Reason} when
     Name :: atom(),
     Module :: module(),
@@ -181,12 +183,14 @@ start(Name, Module, Args, Options0) when is_map(Options0) ->
 
 start(Name, Module, Args) -> start(Name, Module, Args, #{}).
 
+start(Module, Args) -> start([], Module, Args, #{}).
+
 %% @doc Call action that will be overload safe
 %% @end
 -spec load(Olp, Msg) -> ok when
     Olp :: olp_ref(),
     Msg :: term().
-load({_Name, Pid, ModeRef}, Msg) ->
+load({Pid, ModeRef}, Msg) ->
     %% If the process is getting overloaded, the message will be
     %% synchronous instead of asynchronous (slows down the tempo of a
     %% process causing much load). If the process is choked, drop mode
@@ -215,7 +219,7 @@ reset(Olp) ->
     call(Olp, ?msg(reset)).
 
 -spec stop(Olp) -> ok when Olp :: atom() | pid() | olp_ref().
-stop({_Name, Pid, _ModeRef}) ->
+stop({Pid, _ModeRef}) ->
     stop(Pid);
 stop(Pid) ->
     _ = gen_server:call(Pid, ?msg(stop)),
@@ -240,7 +244,7 @@ get_ref(PidOrName) ->
     call(PidOrName, ?msg(get_ref)).
 
 -spec get_pid(olp_ref()) -> pid().
-get_pid({_Name, Pid, _ModeRef}) ->
+get_pid({Pid, _ModeRef}) ->
     Pid.
 
 %%%===================================================================
@@ -249,13 +253,15 @@ get_pid({_Name, Pid, _ModeRef}) ->
 
 %% @hidden
 init([Name, Module, Args, Options]) ->
-    register(Name, self()),
+    if is_atom(Name) -> register(Name, self());
+       true -> ok
+    end,
     process_flag(message_queue_data, off_heap),
 
     ?start_observation(Name),
 
-    ModeRef = {?MODULE, Name},
-    OlpRef = {Name, self(), ModeRef},
+    ModeRef = make_ref(),
+    OlpRef = {self(), ModeRef},
     put(?msg(ref), OlpRef),
     try Module:init(Args) of
         {ok, CBState} ->
@@ -298,10 +304,10 @@ handle_call(?msg({load, Msg}), _From, State) ->
     {Result, State1} = do_load(Msg, call, State#{idle => false}),
     %% Result == ok | dropped
     reply_return(Result, State1);
-handle_call(?msg(get_ref), _From, #{id := Name, mode_ref := ModeRef} = State) ->
-    reply_return({ok, {Name, self(), ModeRef}}, State);
+handle_call(?msg(get_ref), _From, #{mode_ref := ModeRef} = State) ->
+    reply_return({ok, {self(), ModeRef}}, State);
 handle_call(?msg({set_opts, Opts0}), _From, State) ->
-    Opts = maps:merge(maps:with(?OPT_KEYS, State), Opts0),
+    Opts = maps:merge(maps:with(?enough_options, State), Opts0),
     case check_opts(Opts) of
         ok ->
             reply_return(ok, maps:merge(State, Opts));
@@ -309,7 +315,7 @@ handle_call(?msg({set_opts, Opts0}), _From, State) ->
             reply_return(Error, State)
     end;
 handle_call(?msg(get_opts), _From, State) ->
-    reply_return(maps:with(?OPT_KEYS, State), State);
+    reply_return(maps:with(?enough_options, State), State);
 handle_call(?msg(info), _From, State) ->
     reply_return(State, State);
 handle_call(?msg(reset), _From, #{module := Module, cb_state := CBState} = State) ->
@@ -327,8 +333,12 @@ handle_call(Msg, From, #{module := Module, cb_state := CBState} = State) ->
     case try_callback_call(Module, handle_call, [Msg, From, CBState]) of
         {reply, Reply, CBState1} ->
             reply_return(Reply, State#{cb_state => CBState1});
+        {reply, Reply, CBState1, {continue, Continue}} ->
+            {reply, Reply, State#{cb_state => CBState1}, {continue, Continue}};
         {noreply, CBState1} ->
             noreply_return(State#{cb_state => CBState1});
+        {noreply, CBState1, {continue, Continue}} ->
+            {noreply, State#{cb_state => CBState1}, {continue, Continue}};
         {stop, Reason, Reply, CBState1} ->
             {stop, Reason, Reply, State#{cb_state => CBState1}};
         {stop, Reason, CBState1} ->
@@ -344,6 +354,8 @@ handle_cast(Msg, #{module := Module, cb_state := CBState} = State) ->
     case try_callback_call(Module, handle_cast, [Msg, CBState]) of
         {noreply, CBState1} ->
             noreply_return(State#{cb_state => CBState1});
+        {noreply, CBState1, {continue, Continue}} ->
+            {noreply, State#{cb_state => CBState1}, {continue, Continue}};
         {stop, Reason, CBState1} ->
             {stop, Reason, State#{cb_state => CBState1}}
     end.
@@ -361,6 +373,24 @@ handle_info(Msg, #{module := Module, cb_state := CBState} = State) ->
     case try_callback_call(Module, handle_info, [Msg, CBState]) of
         {noreply, CBState1} ->
             noreply_return(State#{cb_state => CBState1});
+        {noreply, CBState1, {continue, Continue}} ->
+            {noreply, State#{cb_state => CBState1}, {continue, Continue}};
+        {stop, Reason, CBState1} ->
+            {stop, Reason, State#{cb_state => CBState1}};
+        {load, CBState1} ->
+            {_, State1} = do_load(Msg, cast, State#{
+                idle => false,
+                cb_state => CBState1
+            }),
+            noreply_return(State1)
+    end.
+
+handle_continue(Msg, #{module := Module, cb_state := CBState} = State) ->
+    case try_callback_call(Module, handle_info, [Msg, CBState]) of
+        {noreply, CBState1} ->
+            noreply_return(State#{cb_state => CBState1});
+        {noreply, CBState1, {continue, Continue}} ->
+            {noreply, State#{cb_state => CBState1}, {continue, Continue}};
         {stop, Reason, CBState1} ->
             {stop, Reason, State#{cb_state => CBState1}};
         {load, CBState1} ->
@@ -385,7 +415,9 @@ terminate(
     %% kill_if_choked/3).
 
     %%!!!! to avoid error printout of callback crashed on stop
-    unregister(Name),
+    if is_atom(Name) -> unregister(Name);
+       true -> ok
+    end,
     case try_callback_call(Module, terminate, [overloaded, CBState], ok) of
         {ok, Fun} when is_function(Fun, 0), is_integer(RestartAfter) ->
             set_restart_flag(State),
@@ -396,7 +428,9 @@ terminate(
     end;
 terminate(Reason, #{id := Name, module := Module, cb_state := CBState}) ->
     _ = try_callback_call(Module, terminate, [Reason, CBState], ok),
-    unregister(Name),
+    if is_atom(Name) -> unregister(Name);
+        true -> ok
+    end,
     ok.
 
 %% @hidden
@@ -407,7 +441,7 @@ format_status(Opt, [
         cb_state := CBState0
     } = State
 ]) ->
-    Opts = maps:with(?OPT_KEYS, State),
+    Opts = maps:with(?enough_options, State),
     PDict = lists:keydelete(?msg(ref), 1, PDict0),
     CBState = try_callback_call(Module, format_status, [Opt, CBState0], CBState0),
     [
@@ -437,7 +471,7 @@ code_change(OldVsn, #{cb_state := CBState0, module := Module} = State, Extra) ->
 %%%-----------------------------------------------------------------
 %%% Internal functions
 -spec call(Olp, term()) -> term() | {error, busy} when Olp :: atom() | pid() | olp_ref().
-call({_Name, Pid, _ModeRef}, Msg) ->
+call({Pid, _ModeRef}, Msg) ->
     call(Pid, Msg);
 call(Server, Msg) ->
     try
@@ -472,7 +506,7 @@ do_load(Msg, CallOrCast, State) ->
 
 %% this function is called by do_load/3 after an overload check
 %% has been performed, where QLen > FlushQLen
-flush(T1, State = #{id := _Name, last_load_ts := _T0, mode_ref := ModeRef}) ->
+flush(T1, State = #{mode_ref := ModeRef, last_load_ts := _T0}) ->
     %% flush load messages in the mailbox (a limited number in order
     %% to not cause long delays)
     NewFlushed = flush_load(?FLUSH_MAX_N),
@@ -511,7 +545,6 @@ handle_load(
     Msg,
     _CallOrCast,
     State = #{
-        id := _Name,
         module := Module,
         cb_state := CBState,
         last_qlen := LastQLen,
@@ -625,7 +658,6 @@ reset_restart_flag(#{id := Name, module := Module} = State) ->
 
 check_load(
     State = #{
-        id := _Name,
         mode_ref := ModeRef,
         mode := Mode,
         sync_mode_qlen := SyncModeQLen,
